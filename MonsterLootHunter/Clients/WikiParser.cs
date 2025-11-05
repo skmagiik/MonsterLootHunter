@@ -1,13 +1,16 @@
-﻿using System.Text.RegularExpressions;
+﻿using Dalamud.Plugin.Services;
 using Fizzler.Systems.HtmlAgilityPack;
 using HtmlAgilityPack;
 using MonsterLootHunter.Data;
 using MonsterLootHunter.Utils;
 using System.Collections.Concurrent;
+using System.Text.Json;
+using System.Text.RegularExpressions;
+using System.Web;
 
 namespace MonsterLootHunter.Clients
 {
-    public partial class WikiParser
+    public partial class WikiParser()
     {
         private delegate IEnumerable<LootDrops> Processors(HtmlNode node);
 
@@ -29,10 +32,22 @@ namespace MonsterLootHunter.Clients
         [GeneratedRegex(@"&#.+;")]
         private static partial Regex UnicodeCharacterRemovalRegex();
 
-        public static Task<LootData> ParseResponse(HtmlDocument document, LootData lootData)
+        public static Task<LootData> ParseResponse(HtmlDocument document, LootData lootData, IPluginLog pluginLog)
         {
-            var body = document.DocumentNode.QuerySelector("div#bodyContent");
-            var bodyContent = body.QuerySelector("div.mw-content-ltr div.mw-parser-output");
+            //pluginLog.Info("document: {0}", document.Text);
+            var jsonData= document.DocumentNode.QuerySelector("body>pre");
+            //pluginLog.Info("json_data: {0}", jsonData.InnerText);
+            var doc = JsonDocument.Parse(jsonData.InnerText);
+            var parse = doc.RootElement.GetProperty("parse");
+            var text = parse.GetProperty("text").GetProperty("*").ToString();
+            //pluginLog.Info("Response Text: {0}", text);
+
+
+            var hap = new HtmlAgilityPack.HtmlDocument();
+            hap.LoadHtml(HttpUtility.HtmlDecode(text));
+            //pluginLog.Info("new HAP: {0}", hap.Text);
+            var bodyContent = hap.DocumentNode.QuerySelector("div.mw-parser-output");
+            pluginLog.Info("div.mw-content-ltr div.mw-parser-output: {0}", bodyContent);
             var concurrentList = new ConcurrentBag<LootDrops>();
             Parallel.Invoke(() => { AddToBag(GetDutyDrops, bodyContent); },
                             () => { AddToBag(GetMonsterDropsFromTable, bodyContent); },
@@ -41,7 +56,7 @@ namespace MonsterLootHunter.Clients
                             () => { AddToBag(GetPossibleDesynthesis, bodyContent); },
                             () => { AddToBag(GetPossibleGathering, bodyContent); },
                             () => { AddToBag(GetPossibleGatheringTable, bodyContent); },
-                            () => { lootData.LootPurchaseLocations.AddRange(GetVendorPurchases(bodyContent)); });
+                            () => { lootData.LootPurchaseLocations.AddRange(GetVendorPurchases(bodyContent, pluginLog)); });
 
             lootData.LootLocations.AddRange(concurrentList.AsEnumerable());
             return Task.FromResult(lootData);
@@ -104,22 +119,29 @@ namespace MonsterLootHunter.Clients
             return dutyDrops.AsEnumerable();
         }
 
-        private static IEnumerable<LootPurchase> GetVendorPurchases(HtmlNode node)
+        private static IEnumerable<LootPurchase> GetVendorPurchases(HtmlNode node, IPluginLog pluginLog)
         {
             var purchaseHeader = node.QuerySelectorAll("h3").ToList();
             var purchaseTopHeader = node.QuerySelectorAll("h2").ToList();
-            if (!purchaseHeader.Any(n => n.QuerySelector("span#Purchase") != null || n.QuerySelector("span#Purchased") != null || n.QuerySelector("span#Purchased_From") != null) ||
-                purchaseTopHeader.All(n => n.QuerySelector("span#Acquisition") == null))
+
+            if (!purchaseHeader.Any(n => n.InnerText.Contains("Purchase")))
+            {
+                pluginLog.Info("Unable to find Purchase or span#Purchase etc...");
                 return [];
+            }
 
             var purchaseList = node.QuerySelector("table.npc tbody")?.QuerySelectorAll("tr").ToList();
             if (purchaseList is null || purchaseList.Count == 0)
+            {
+                pluginLog.Info("purchaseList is empty...");
                 return [];
+            }
 
             purchaseList.RemoveAt(0);
 
             var vendors = new ConcurrentBag<LootPurchase>();
 
+            //pluginLog.Info("{0}", purchaseList.ToString());
             Parallel.ForEach(purchaseList, vendorNode =>
             {
                 var vendor = vendorNode.QuerySelectorAll("td").ToList();

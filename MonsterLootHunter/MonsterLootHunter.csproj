@@ -34,6 +34,7 @@
         <OutputPath>bin\Release</OutputPath>
     </PropertyGroup>
     <ItemGroup>
+        <PackageReference Include="FlareSolverrSharp" Version="3.0.7" />
         <PackageReference Include="HtmlAgilityPack" Version="1.11.74" />
         <PackageReference Include="Fizzler.Systems.HtmlAgilityPack" Version="1.2.1" />
         <PackageReference Include="XivCommon" Version="9.0.0" />
